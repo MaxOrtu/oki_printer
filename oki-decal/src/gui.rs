@@ -418,7 +418,7 @@ impl eframe::App for App {
             let painter = ui.painter();
             painter.rect_filled(page_rect.translate(egui::vec2(4.0, 5.0)), 3.0, Color32::from_rgb(8, 9, 12));
             painter.rect_filled(page_rect, 3.0, Color32::from_rgb(250, 250, 250));
-            painter.rect_stroke(page_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(60, 64, 74)), egui::StrokeKind::Outside);
+            painter.rect_stroke(page_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(60, 64, 74)));
 
             if let Some(tex) = &self.texture {
                 let (iw_px, ih_px) = self.tex_size;
@@ -441,7 +441,7 @@ impl eframe::App for App {
 
                 let resp = ui.interact(img_rect, egui::Id::new("img_drag"), egui::Sense::drag());
                 if resp.hovered() || resp.dragged() {
-                    painter.rect_stroke(img_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(70, 110, 180)), egui::StrokeKind::Outside);
+                    painter.rect_stroke(img_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(70, 110, 180)));
                 }
                 if resp.dragged() {
                     self.opts.x_mm = (self.opts.x_mm + resp.drag_delta().x / px_mm).clamp(0.0, (210.0 - w_mm).max(0.0));
