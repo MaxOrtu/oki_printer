@@ -1,0 +1,29 @@
+# Build
+oki-decal/target/
+
+# Output di stampa / catture (rigenerabili)
+*.prn
+*capture*.prn
+
+# Pacchetti e file proprietari CADlink/OKI (non ridistribuibili)
+pkg/
+pkg_max/
+live/
+driver/
+*.pkg64
+*.icm
+*.icc
+*.ICM
+*.PDX
+*.PPD
+*.psqx
+*.psax
+*.pscx
+
+# Documentazione vendor / temp
+*.pdf
+manual.txt
+oki_list.html
+oki_page.html
+*.log
+.claude/

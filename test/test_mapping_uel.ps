@@ -1,0 +1,57 @@
+%-12345X%!PS-Adobe-3.0
+% OKI C711WT - Test chart: mapping canali dati -> toner fisici
+% Stampa questo file RAW sulla stampante.
+% Ogni barra e' al 100% di UN SOLO canale CMYK del dato.
+% Segna sul foglio che colore fisico esce da ogni barra!
+
+/Courier-Bold findfont 16 scalefont def
+/LBL exch def
+
+/inch {72 mul} def
+
+% --- pagina A4 portrait ---
+595 842 translate
+
+% ===== BARRE: 4 barre da 100% di un solo canale =====
+% Ogni barra: x y w h c m y k label
+/bar {
+  /k exch def /y el exch def /c exch def
+  /yy exch def /xx exch def
+  c y el k setcmykcolor
+  xx yy 500 90 rectfill
+} def
+
+% titolo
+0 0 0 1 setcmykcolor
+0 780 moveto
+(OKI C711WT - TEST MAPPA CANALI) show
+
+0 755 moveto
+(Segna il colore fisico di ogni barra!) show
+
+% Barra 1: CYAN nel dato
+0 0 0 1 setcmykcolor
+40 640 moveto (Barra 1: dato CIANO   1 0 0 0) show
+40 560 500 70 1 0 0 0 bar
+
+% Barra 2: MAGENTA nel dato
+0 0 0 1 setcmykcolor
+40 500 moveto (Barra 2: dato MAGENTA 0 1 0 0) show
+40 420 500 70 0 1 0 0 bar
+
+% Barra 3: GIALLO nel dato
+0 0 0 1 setcmykcolor
+40 360 moveto (Barra 3: dato GIALLO  0 0 1 0) show
+40 280 500 70 0 0 1 0 bar
+
+% Barra 4: NERO (K) nel dato
+0 0 0 1 setcmykcolor
+40 220 moveto (Barra 4: dato NERO K  0 0 0 1) show
+40 140 500 70 0 0 0 1 bar
+
+0 0 0 1 setcmykcolor
+40 100 moveto (Se una barra esce BIANCA = il canale va al toner bianco!) show
+40 75 moveto (Riporta: 1=____ 2=____ 3=____ 4=____) show
+
+showpage
+%-12345X
