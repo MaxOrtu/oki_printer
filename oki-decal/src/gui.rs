@@ -20,6 +20,7 @@ struct App {
     path: Option<String>,
     texture: Option<TextureHandle>,
     tex_size: (u32, u32),
+    orig_size: (u32, u32),
     opts: DecalOptions,
     highlight_white: bool,
     printer: String,
@@ -43,6 +44,7 @@ impl App {
             path: None,
             texture: None,
             tex_size: (1, 1),
+            orig_size: (1, 1),
             opts: DecalOptions::default(),
             highlight_white: false,
             printer: "OKI C711WT".into(),
@@ -75,7 +77,7 @@ impl App {
             let [r, g, b, a] = p.0;
             let (x, y) = ((i % pw as usize) as u32, (i / pw as usize) as u32);
             let checker = ((x / 10 + y / 10) % 2 == 0) as u8;
-            let bg = 26 + checker * 14; // dark checkerboard: white pops naturally
+            let bg = 195 + checker * 40; // checker chiaro stile Photoshop
             let af = a as f32 / 255.0;
             let mut rr = (r as f32 * af + bg as f32 * (1.0 - af)) as u8;
             let mut gg = (g as f32 * af + bg as f32 * (1.0 - af)) as u8;
@@ -90,6 +92,7 @@ impl App {
         let img = ColorImage::from_rgb([pw as usize, ph as usize], &px);
         self.texture = Some(ctx.load_texture("preview", img, TextureOptions::LINEAR));
         self.tex_size = (pw, ph);
+        self.orig_size = (w, h);
         let name = std::path::Path::new(path)
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -421,7 +424,8 @@ impl eframe::App for App {
             painter.rect_stroke(page_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(60, 64, 74)));
 
             if let Some(tex) = &self.texture {
-                let (iw_px, ih_px) = self.tex_size;
+                let (iw_px, ih_px) = self.orig_size;
+                // mm naturali a 600 dpi — dall'immagine ORIGINALE (non dalla preview ridotta!)
                 let nat_w_mm = iw_px as f32 * 25.4 / 600.0;
                 let nat_h_mm = ih_px as f32 * 25.4 / 600.0;
                 let max_w_mm = 210.0 - 50.0;
