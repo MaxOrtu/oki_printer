@@ -319,7 +319,8 @@ fn halftone_dots45(values: &[f32], w: u32, h: u32) -> Vec<u8> {
             // coordinate ruotate 45 gradi: celle ~1/150 pollice a 600dpi
             let u = ((x as i64 + y as i64) / 4).rem_euclid(8) as usize;
             let v = ((x as i64 - y as i64 + 8 * 4096) / 4).rem_euclid(8) as usize;
-            let thr = BAYER8[u][v] as f32 / 64.0;
+            // +1: soglia minima 1/64 — i residui ~0 non generano griglie di puntini
+            let thr = (BAYER8[u][v] as f32 + 1.0) / 64.0;
             let on = old > thr;
             if on {
                 out[(y as usize) * row_len + (x as usize) / 8] |= 0x80 >> (x % 8);
@@ -466,9 +467,15 @@ pub fn decal_stream(input: &str, opts: &DecalOptions) -> Result<Vec<u8>, String>
         if opts.explicit_white && mask[i] {
             cv[i] = 0.0; mv[i] = 0.0; yv[i] = 0.0; // knockout
         } else {
+            // niente toner nero: K piegato in CMY + soglia anti-griglia
+            // (il bianco carta dall'ICC esce con residui ~1%: lo screen 45°
+            //  li trasformerebbe in una griglia di puntini — taglio sotto il 3%)
             cv[i] = apply_curve((cf + kf * (1.0 - cf)).min(1.0), &CURVE_C);
             mv[i] = apply_curve((mf + kf * (1.0 - mf)).min(1.0), &CURVE_M);
             yv[i] = apply_curve((yf + kf * (1.0 - yf)).min(1.0), &CURVE_Y);
+            if cv[i] < 0.03 { cv[i] = 0.0; }
+            if mv[i] < 0.03 { mv[i] = 0.0; }
+            if yv[i] < 0.03 { yv[i] = 0.0; }
         }
     }
     let cp = if opts.dots45 {
