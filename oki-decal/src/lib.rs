@@ -159,9 +159,15 @@ pub fn build_stream(prof: &Profile, planes: &[Plane], with_pjl: bool, plane_head
     s.extend_from_slice(b"\x1B*r1A");
     s.extend_from_slice(b"\x1B*b0Y");
     s.extend_from_slice(b"\x1B%1A");
-    s.extend_from_slice(format!("\x1B*r-{}U", plane_header).as_bytes()); // N planes
-    s.extend_from_slice(b"\x1B&u1200D");
-    s.extend_from_slice(b"\x1B/t1200R"); // variante slash per 1200dpi
+    if with_pjl {
+        // 600 x 1200 (V1200 via PJL)
+        s.extend_from_slice(b"\x1B*r-4U");
+        s.extend_from_slice(b"\x1B&u1200D\x1B/t1200R");
+    } else {
+        // 600 x 600 (modalita' nativa senza PJL)
+        s.extend_from_slice(b"\x1B*r-4U");
+        s.extend_from_slice(b"\x1B&u600D\x1B*t600R");
+    }
     s.extend_from_slice(b"\x1B*b2M"); // TIFF packbits
 
     // ===== RIGHE INTERLACCIATE (dal capture DF reale!) =====
@@ -274,11 +280,53 @@ pub fn rgb_to_cmyk_icc(img: &DynamicImage) -> Vec<[u8; 4]> {
     let src: Vec<[u8; 3]> = img
         .to_rgba8()
         .pixels()
-        .map(|p: &Rgba<u8>| [p.0[0], p.0[1], p.0[2]])
+        .map(|p: &Rgba<u8>| {
+            let [r, g, b, a] = p.0;
+            // COMPOSIZIONE SU BIANCO: i pixel trasparenti spesso nascondono RGB nero;
+            // senza questo verrebbero stampati come nero ricco (bug fondo nero)
+            let af = a as f32 / 255.0;
+            let r2 = (r as f32 * af + 255.0 * (1.0 - af)) as u8;
+            let g2 = (g as f32 * af + 255.0 * (1.0 - af)) as u8;
+            let b2 = (b as f32 * af + 255.0 * (1.0 - af)) as u8;
+            [r2, g2, b2]
+        })
         .collect();
     let mut dst: Vec<[u8; 4]> = vec![[0u8; 4]; src.len()];
     transform.transform_pixels(&src, &mut dst);
     dst
+}
+
+// ---------- halftone cluster 45° (screen tipografico per colori piatti) ----------
+fn halftone_dots45(values: &[f32], w: u32, h: u32) -> Vec<u8> {
+    // screen a 45 gradi: griglia ruotata di celle 8x8 su coordinate (u,v) = ruota(x,y)
+    // soglia del cluster = matrice bayer su (u mod 8, v mod 8)
+    const BAYER8: [[u16; 8]; 8] = [
+        [0, 32, 8, 40, 2, 34, 10, 42],
+        [48, 16, 56, 24, 50, 18, 58, 26],
+        [12, 44, 4, 36, 14, 46, 6, 38],
+        [60, 28, 52, 20, 62, 30, 54, 22],
+        [3, 35, 11, 43, 1, 33, 9, 41],
+        [51, 19, 59, 27, 49, 17, 57, 25],
+        [15, 47, 7, 39, 13, 45, 5, 37],
+        [63, 31, 55, 23, 61, 29, 53, 21],
+    ];
+    let mut out = vec![0u8; (((w + 7) / 8) * h) as usize];
+    let row_len = ((w + 7) / 8) as usize;
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            let old = values[i].clamp(0.0, 1.0);
+            // coordinate ruotate 45 gradi: celle ~1/150 pollice a 600dpi
+            let u = ((x as i64 + y as i64) / 4).rem_euclid(8) as usize;
+            let v = ((x as i64 - y as i64 + 8 * 4096) / 4).rem_euclid(8) as usize;
+            let thr = BAYER8[u][v] as f32 / 64.0;
+            let on = old > thr;
+            if on {
+                out[(y as usize) * row_len + (x as usize) / 8] |= 0x80 >> (x % 8);
+            }
+        }
+    }
+    out
 }
 
 // ---------- halftone Floyd-Steinberg 1bpp ----------
@@ -360,11 +408,24 @@ pub struct DecalOptions {
     pub mirror: bool,
     pub media: String, // plain|letterhead|transparency|labels|bond|cardstock|glossy
     pub with_pjl: bool,
+    pub width_mm: f32, // 0 = adatta alla pagina (centrata)
+    pub x_mm: f32,     // offset da sinistra (mm)
+    pub y_mm: f32,     // offset dall'alto (mm)
+    pub dots45: bool,  // true = screen cluster 45° (colori piatti), false = diffusion (foto)
 }
 
 impl Default for DecalOptions {
     fn default() -> Self {
-        DecalOptions { explicit_white: false, mirror: false, media: "glossy".into(), with_pjl: false }
+        DecalOptions {
+            explicit_white: false,
+            mirror: false,
+            media: "glossy".into(),
+            with_pjl: false,
+            width_mm: 0.0,
+            x_mm: 20.0,
+            y_mm: 20.0,
+            dots45: true,
+        }
     }
 }
 
@@ -372,16 +433,24 @@ pub fn decal_stream(input: &str, opts: &DecalOptions) -> Result<Vec<u8>, String>
     let img = image::open(input).map_err(|e| format!("immagine non leggibile: {e}"))?;
     let mut prof = a4_profile("OKI-DECAL");
     prof.media_name = media_code(&opts.media);
+    // senza PJL: 600x600 (geometria corretta); con PJL: 600x1200 (V1200)
+    let dpi_y = if opts.with_pjl { 1200.0f64 } else { 600.0 };
     let pw = (7.93f64 * 600.0).round() as u32;
-    let ph = (11.36f64 * 1200.0).round() as u32;
+    let ph = (11.36f64 * dpi_y).round() as u32;
     let (iw, ih) = img.dimensions();
 
-    // scala per entrare nella pagina (margini ~0.35in)
-    let max_w = pw - (2.0f64 * 0.35 * 600.0).round() as u32;
-    let max_h = ph - (2.0f64 * 0.35 * 1200.0).round() as u32;
-    let scale = (max_w as f64 / iw as f64).min(max_h as f64 / ih as f64).min(1.0);
-    let dw = ((iw as f64) * scale).round() as u32;
-    let dh = ((ih as f64) * scale).round() as u32;
+    // dimensione di stampa: width_mm se impostato, altrimenti adatta alla pagina
+    let m2dotx = 600.0 / 25.4;
+    let m2doty = dpi_y / 25.4;
+    let max_w = pw - (2.0f64 * 0.25 * 600.0).round() as u32;
+    let max_h = ph - (2.0f64 * 0.25 * 1200.0).round() as u32;
+    let scale = if opts.width_mm > 0.0 {
+        (opts.width_mm as f64 * m2dotx) / iw as f64
+    } else {
+        (max_w as f64 / iw as f64).min(max_h as f64 / ih as f64).min(1.0)
+    };
+    let dw = ((iw as f64) * scale).round().max(1.0) as u32;
+    let dh = ((ih as f64) * scale).round().max(1.0) as u32;
     let resized = img.resize_exact(dw, dh, image::imageops::FilterType::Lanczos3);
 
     let mask = white_mask_from_alpha(&resized, 3, opts.explicit_white);
@@ -402,12 +471,27 @@ pub fn decal_stream(input: &str, opts: &DecalOptions) -> Result<Vec<u8>, String>
             yv[i] = apply_curve((yf + kf * (1.0 - yf)).min(1.0), &CURVE_Y);
         }
     }
-    let cp = halftone_plane(&cv, dw, dh);
-    let mp = halftone_plane(&mv, dw, dh);
-    let yp = halftone_plane(&yv, dw, dh);
+    let cp = if opts.dots45 {
+        halftone_dots45(&cv, dw, dh)
+    } else {
+        halftone_plane(&cv, dw, dh)
+    };
+    let mp = if opts.dots45 {
+        halftone_dots45(&mv, dw, dh)
+    } else {
+        halftone_plane(&mv, dw, dh)
+    };
+    let yp = if opts.dots45 {
+        halftone_dots45(&yv, dw, dh)
+    } else {
+        halftone_plane(&yv, dw, dh)
+    };
 
-    let x0 = ((pw - dw) / 2) as usize;
-    let y0 = ((ph - dh) / 2) as usize;
+    // posizionamento: offset mm dall'alto-sinistra (trascinabili nella GUI)
+    let mut x0 = (opts.x_mm as f64 * m2dotx).round() as usize;
+    let mut y0 = (opts.y_mm as f64 * m2doty).round() as usize;
+    if x0 + dw as usize > pw as usize { x0 = (pw as usize).saturating_sub(dw as usize); }
+    if y0 + dh as usize > ph as usize { y0 = (ph as usize).saturating_sub(dh as usize); }
     let mut c_full = Plane::empty(pw, ph);
     let mut m_full = Plane::empty(pw, ph);
     let mut y_full = Plane::empty(pw, ph);
@@ -434,4 +518,36 @@ pub fn bars_stream(with_pjl: bool) -> Vec<u8> {
     let prof = a4_profile("OKI-DECAL BARS");
     let planes = make_bars(w, h);
     build_stream(&prof, &planes, with_pjl, 4)
+}
+
+/// quadrato di calibrazione 100x100mm + righello: verifica geometrica della stampa
+pub fn calib_stream() -> Vec<u8> {
+    let pw = (7.93f64 * 600.0).round() as u32;
+    let ph = (11.36f64 * 600.0).round() as u32;
+    let prof = a4_profile("OKI CALIB 100mm");
+    let side = (100.0f64 * 600.0 / 25.4).round() as u32; // 100mm = 2362 px @600
+    let x0 = (20.0f64 * 600.0 / 25.4).round() as usize;
+    let y0 = (20.0f64 * 600.0 / 25.4).round() as usize;
+    let mut c = Plane::empty(pw, ph);
+    let mut m = Plane::empty(pw, ph);
+    for y in y0..y0 + side as usize {
+        for x in x0..x0 + side as usize {
+            // meta' sinistra ciano, meta' destra magenta: se e' tutta un colore = DPI X/Y sbagliati
+            if x < x0 + (side as usize) / 2 {
+                c.set(x as u32, y as u32);
+            } else {
+                m.set(x as u32, y as u32);
+            }
+        }
+    }
+    // righello: tacche ogni 25mm lungo il bordo alto (0.5x3mm ciano)
+    for mm in 0..=250u32 {
+        let x = (20.0f64 * 600.0 / 25.4).round() as usize + (mm as f64 * 600.0 / 25.4).round() as usize;
+        for yy in (5.0f64 * 600.0 / 25.4).round() as usize..((5.0f64 + 3.0) * 600.0 / 25.4).round() as usize {
+            for xx in x..x + 3 {
+                c.set(xx as u32, yy as u32);
+            }
+        }
+    }
+    build_stream(&prof, &[c, Plane::empty(pw, ph), m, Plane::empty(pw, ph)], false, 4)
 }

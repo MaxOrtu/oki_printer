@@ -24,6 +24,7 @@ struct App {
     highlight_white: bool,
     printer: String,
     status: Status,
+    rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
 }
 
 enum Status {
@@ -46,6 +47,7 @@ impl App {
             highlight_white: false,
             printer: "OKI C711WT".into(),
             status: Status::Idle("Open or drop a transparent PNG to begin"),
+            rx: None,
         }
     }
 
@@ -109,6 +111,9 @@ impl App {
     }
 
     fn print(&mut self) {
+        if self.rx.is_some() {
+            return; // gia' in elaborazione
+        }
         let path = match &self.path {
             Some(p) => p.clone(),
             None => {
@@ -117,20 +122,30 @@ impl App {
             }
         };
         let opts = self.opts.clone();
-        self.status = Status::Info("Processing: ICC → curves → halftone → PCL…".into());
-        match decal_stream(&path, &opts) {
-            Ok(bytes) => {
-                let _ = std::fs::write("decal.prn", &bytes); // safety copy
-                match raw_print(&self.printer, &bytes) {
-                    Ok(n) => self.status = Status::Ok(format!("Sent! {n} bytes → '{}'", self.printer)),
-                    Err(e) => self.status = Status::Warn(format!(
-                        "decal.prn saved ({} B) but send failed: {e} — fallback: test/Send-RAW.ps1",
-                        bytes.len()
-                    )),
+        let printer = self.printer.clone();
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.status = Status::Info(format!("Processing {name}: ICC → curves → halftone → PCL…"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.rx = Some(rx);
+        std::thread::spawn(move || {
+            let res = match decal_stream(&path, &opts) {
+                Ok(bytes) => {
+                    let _ = std::fs::write("decal.prn", &bytes); // safety copy
+                    match raw_print(&printer, &bytes) {
+                        Ok(n) => Ok(format!("Sent! {n} bytes → '{printer}'")),
+                        Err(e) => Err(format!(
+                            "decal.prn saved ({} B) but send failed: {e} — fallback: test/Send-RAW.ps1",
+                            bytes.len()
+                        )),
+                    }
                 }
-            }
-            Err(e) => self.status = Status::Err(e),
-        }
+                Err(e) => Err(e),
+            };
+            let _ = tx.send(res);
+        });
     }
 }
 
@@ -187,6 +202,25 @@ fn style(ctx: &egui::Context) {
 // ---------------------------------------------------------------- ui
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // risultato del thread di stampa (se attivo)
+        if let Some(rx) = &self.rx {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            match rx.try_recv() {
+                Ok(Ok(msg)) => {
+                    self.status = Status::Ok(msg);
+                    self.rx = None;
+                }
+                Ok(Err(msg)) => {
+                    self.status = Status::Warn(msg);
+                    self.rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.rx = None;
+                }
+            }
+        }
+
         // drag & drop
         let dropped: Option<String> = ctx.input(|i| {
             i.raw
@@ -260,6 +294,25 @@ impl eframe::App for App {
                 ui.checkbox(&mut self.opts.mirror, "↔  Mirror");
                 ui.add_space(10.0);
 
+                ui.label(egui::RichText::new("SIZE & POSITION (mm)").small().strong().color(Color32::from_rgb(200, 210, 230)));
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label("W");
+                    ui.add(egui::DragValue::new(&mut self.opts.width_mm).speed(1.0).range(0.0..=200.0).suffix(" mm"));
+                    ui.label("(0 = fit)");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("X");
+                    ui.add(egui::DragValue::new(&mut self.opts.x_mm).speed(1.0).range(0.0..=200.0).suffix(" mm"));
+                    ui.label("Y");
+                    ui.add(egui::DragValue::new(&mut self.opts.y_mm).speed(1.0).range(0.0..=280.0).suffix(" mm"));
+                });
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("SCREEN").small().strong().color(Color32::from_rgb(200, 210, 230)));
+                ui.radio_value(&mut self.opts.dots45, true, "Dots 45° (flat colors)");
+                ui.radio_value(&mut self.opts.dots45, false, "Diffusion (photos)");
+                ui.add_space(10.0);
+
                 ui.label(egui::RichText::new("MEDIA").small().strong().color(Color32::from_rgb(200, 210, 230)));
                 egui::ComboBox::from_id_salt("media")
                     .selected_text(self.opts.media.clone())
@@ -285,6 +338,7 @@ impl eframe::App for App {
                 ui.text_edit_singleline(&mut self.printer);
                 ui.add_space(12.0);
 
+                let can_print = self.path.is_some();
                 let b_open = ui.add(
                     egui::Button::new("📂  Open image…")
                         .min_size(egui::vec2(ui.available_width() - 8.0, 32.0)),
@@ -300,14 +354,23 @@ impl eframe::App for App {
                 }
                 ui.add_space(6.0);
 
-                let can_print = self.path.is_some();
-                let b_print = ui.add(
+                let busy = self.rx.is_some();
+                let b_print = ui.add_enabled(
+                    can_print && !busy,
                     egui::Button::new(
-                        egui::RichText::new("🖨   P R I N T".to_string())
-                            .color(if can_print { Color32::BLACK } else { Color32::GRAY })
-                            .strong(),
+                        egui::RichText::new(if busy {
+                            "⏳  PROCESSING…".to_string()
+                        } else {
+                            "🖨   P R I N T".to_string()
+                        })
+                        .color(if can_print && !busy {
+                            Color32::BLACK
+                        } else {
+                            Color32::GRAY
+                        })
+                        .strong(),
                     )
-                    .fill(if can_print {
+                    .fill(if can_print && !busy {
                         Color32::from_rgb(120, 190, 130)
                     } else {
                         Color32::from_rgb(70, 76, 88)
@@ -340,44 +403,67 @@ impl eframe::App for App {
                 }
             });
 
-        // center: preview
+        // center: A4 page preview with draggable image
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(tex) = &self.texture {
-                let avail = ui.available_size();
-                let (tw, th) = self.tex_size;
-                let s = (avail.x / tw as f32).min(avail.y / th as f32).min(1.4);
-                let size = egui::vec2(tw as f32 * s, th as f32 * s);
-                ui.centered_and_justified(|ui| {
-                    egui::Frame::default()
-                        .fill(Color32::from_rgb(12, 13, 17))
-                        .inner_margin(egui::Margin::symmetric(6.0, 6.0))
-                        .show(ui, |ui| {
-                            ui.image((tex.id(), size));
-                        });
-                });
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("Drop a transparent PNG here")
-                                .size(22.0)
-                                .strong()
-                                .color(Color32::from_rgb(225, 230, 240)),
-                        );
-                        ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new("or click “Open image…” on the right")
-                                .color(Color32::from_rgb(140, 155, 180)),
-                        );
-                        ui.add_space(14.0);
-                        ui.label(
-                            egui::RichText::new("cyan highlight = white toner layer")
-                                .small()
-                                .color(Color32::from_rgb(110, 125, 150)),
-                        );
-                    });
-                });
+            let avail = ui.available_size();
+            let page_h = (avail.y - 30.0).max(100.0);
+            let mut page_w = page_h * (210.0 / 297.0);
+            if page_w > avail.x - 30.0 {
+                page_w = avail.x - 30.0;
             }
+            let page_h = page_w * (297.0 / 210.0);
+            let px_mm = page_h / 297.0;
+
+            let (page_rect, _resp) = ui.allocate_exact_size(egui::vec2(page_w, page_h), egui::Sense::hover());
+            let painter = ui.painter();
+            painter.rect_filled(page_rect.translate(egui::vec2(4.0, 5.0)), 3.0, Color32::from_rgb(8, 9, 12));
+            painter.rect_filled(page_rect, 3.0, Color32::from_rgb(250, 250, 250));
+            painter.rect_stroke(page_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(60, 64, 74)), egui::StrokeKind::Outside);
+
+            if let Some(tex) = &self.texture {
+                let (iw_px, ih_px) = self.tex_size;
+                let nat_w_mm = iw_px as f32 * 25.4 / 600.0;
+                let nat_h_mm = ih_px as f32 * 25.4 / 600.0;
+                let max_w_mm = 210.0 - 50.0;
+                let max_h_mm = 297.0 - 50.0;
+                let (w_mm, h_mm) = if self.opts.width_mm > 0.0 {
+                    let w = self.opts.width_mm;
+                    (w, nat_h_mm * (w / nat_w_mm))
+                } else {
+                    let s = (max_w_mm / nat_w_mm).min(max_h_mm / nat_h_mm).min(1.0);
+                    (nat_w_mm * s, nat_h_mm * s)
+                };
+                let img_rect = egui::Rect::from_min_size(
+                    page_rect.min + egui::vec2(self.opts.x_mm * px_mm, self.opts.y_mm * px_mm),
+                    egui::vec2(w_mm * px_mm, h_mm * px_mm),
+                );
+                painter.image(tex.id(), img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+
+                let resp = ui.interact(img_rect, egui::Id::new("img_drag"), egui::Sense::drag());
+                if resp.hovered() || resp.dragged() {
+                    painter.rect_stroke(img_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(70, 110, 180)), egui::StrokeKind::Outside);
+                }
+                if resp.dragged() {
+                    self.opts.x_mm = (self.opts.x_mm + resp.drag_delta().x / px_mm).clamp(0.0, (210.0 - w_mm).max(0.0));
+                    self.opts.y_mm = (self.opts.y_mm + resp.drag_delta().y / px_mm).clamp(0.0, (297.0 - h_mm).max(0.0));
+                }
+            } else {
+                painter.text(
+                    page_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "Drop a transparent PNG here",
+                    egui::FontId::proportional(15.0),
+                    Color32::from_rgb(150, 155, 170),
+                );
+            }
+
+            painter.text(
+                page_rect.left_bottom() + egui::vec2(0.0, 16.0),
+                egui::Align2::LEFT_TOP,
+                format!("X {:.1} mm   Y {:.1} mm", self.opts.x_mm, self.opts.y_mm),
+                egui::FontId::proportional(12.0),
+                Color32::from_rgb(140, 150, 170),
+            );
         });
     }
 }

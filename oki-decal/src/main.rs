@@ -10,6 +10,11 @@ fn main() {
             std::fs::write("bars.prn", &s).expect("scrittura bars.prn");
             println!("bars.prn ({} byte). Invia: powershell -File test/Send-RAW.ps1 -PrinterName \"OKI C711WT\" -File bars.prn", s.len());
         }
+        "calib" => {
+            let s = oki_decal::calib_stream();
+            std::fs::write("calib.prn", &s).expect("scrittura calib.prn");
+            println!("calib.prn ({} byte): quadrato 100x100mm + tacche da 25mm. Misura col righello!", s.len());
+        }
         "decal" => {
             let input = args.get(2).expect("uso: oki-decal decal <immagine> [opzioni]");
             let mut opts = DecalOptions {
@@ -19,6 +24,12 @@ fn main() {
             };
             if let Some(m) = args.iter().find(|a| a.starts_with("--media=")) {
                 opts.media = m[8..].to_string();
+            }
+            for a in args.iter().skip(3) {
+                if let Some(v) = a.strip_prefix("--width=") { opts.width_mm = v.parse().unwrap_or(0.0); }
+                if let Some(v) = a.strip_prefix("--x=") { opts.x_mm = v.parse().unwrap_or(0.0); }
+                if let Some(v) = a.strip_prefix("--y=") { opts.y_mm = v.parse().unwrap_or(0.0); }
+                if a == "--diffusion" { opts.dots45 = false; }
             }
             opts.with_pjl = args.iter().any(|a| a == "--pjl");
             match decal_stream(input, &opts) {
