@@ -1,8 +1,28 @@
 [package]
 name = "oki-decal"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Decal printer per OKI C711WT white toner — senza RIP"
+license = "MIT"
+
+[lib]
+name = "oki_decal"
+path = "src/lib.rs"
+
+[[bin]]
+name = "oki-decal"
+path = "src/main.rs"
+
+[[bin]]
+name = "oki-decal-gui"
+path = "src/gui.rs"
 
 [dependencies]
-image = "0.25.10"
-lcms2 = "6.2.0"
+image = "0.25"
+lcms2 = "6"
+eframe = "0.29"
+rfd = "0.15"
+windows = { version = "0.58", features = ["Win32_Graphics_Printing", "Win32_Foundation"] }
+
+[profile.release]
+opt-level = 3
