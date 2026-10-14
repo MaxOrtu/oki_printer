@@ -289,6 +289,44 @@ impl eframe::App for App {
                 }
                 ui.add_space(10.0);
 
+                // ---- striscia TONER: configurazione fisica delle cartucce ----
+                ui.label(egui::RichText::new("TONERS (physical order 1→4)").small().strong().color(Color32::from_rgb(200, 210, 230)));
+                ui.add_space(2.0);
+                let yel = Color32::from_rgb(255, 210, 0);
+                let mag = Color32::from_rgb(230, 0, 140);
+                let cyn = Color32::from_rgb(0, 155, 220);
+                let wht = Color32::from_rgb(245, 245, 245);
+                let blk = Color32::from_rgb(25, 25, 25);
+                let dim = Color32::from_rgb(80, 86, 100);
+                let slots: [( &str, Color32, bool); 4] = if !self.opts.photo_mode {
+                    [("W", wht, true), ("Y", yel, true), ("M", mag, true), ("C", cyn, true)]
+                } else if self.opts.k_toner {
+                    [("K", blk, true), ("Y", yel, true), ("M", mag, true), ("C", cyn, true)]
+                } else {
+                    [("W", dim, false), ("Y", yel, true), ("M", mag, true), ("C", cyn, true)]
+                };
+                ui.horizontal(|ui| {
+                    for (i, (label, color, active)) in slots.iter().enumerate() {
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(46.0, 38.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 5.0, *color);
+                        if !active {
+                            ui.painter().rect_filled(rect, 5.0, Color32::from_rgba_unmultiplied(20, 20, 26, 140));
+                        }
+                        let tcol = if matches!(label, "W" | "K") && *active { Color32::BLACK } else { Color32::WHITE };
+                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(15.0).strong(), tcol);
+                        ui.painter().text(rect.center() + egui::vec2(0.0, 24.0), egui::Align2::CENTER_CENTER, format!("{}{}", i + 1, if *active { "" } else { " off" }), egui::FontId::small(), Color32::from_rgb(120, 130, 150));
+                    }
+                });
+                let caption = if !self.opts.photo_mode {
+                    "Decals rig: white deposits FIRST (under everything)"
+                } else if self.opts.k_toner {
+                    "⚠ SWAP: remove WHITE, install BLACK in its place"
+                } else {
+                    "Photo rig: white idle (can stay installed)"
+                };
+                ui.label(egui::RichText::new(caption).small().color(Color32::from_rgb(150, 160, 185)));
+                ui.add_space(10.0);
+
                 if !self.opts.photo_mode {
                     ui.label(egui::RichText::new("WHITE").small().strong().color(Color32::from_rgb(200, 210, 230)));
                     if ui
