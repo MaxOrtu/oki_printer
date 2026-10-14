@@ -377,6 +377,10 @@ impl eframe::App for App {
                         section(ui, "WHITE LAYER");
                         if ui.radio_value(&mut self.opts.explicit_white, false, "Underbase - whole shape").changed() { self.reload_preview(ctx); }
                         if ui.radio_value(&mut self.opts.explicit_white, true, "Only where I painted white").changed() { self.reload_preview(ctx); }
+                        ui.add_space(4.0);
+                        if ui.checkbox(&mut self.opts.double_white, "DOUBLE WHITE (2x density)").changed() {
+                            self.reload_preview(ctx);
+                        }
                         ui.add_space(8.0);
                     }
 
