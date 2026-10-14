@@ -71,6 +71,7 @@ pub fn media_code(name: &str) -> &'static str {
 // ---------- curve di linearizzazione (13 punti, dal psqx live) ----------
 pub const CURVE_C: [f32; 13] = [0.0000, 0.0532, 0.0911, 0.1646, 0.2408, 0.3032, 0.3715, 0.4631, 0.5873, 0.6669, 0.7599, 0.8116, 1.0000];
 pub const CURVE_M: [f32; 13] = [0.0000, 0.0728, 0.0963, 0.1561, 0.2343, 0.3093, 0.3724, 0.4163, 0.4751, 0.5817, 0.6901, 0.7658, 1.0000];
+pub const CURVE_K: [f32; 13] = [0.0000, 0.0500, 0.0773, 0.1472, 0.2259, 0.3002, 0.3695, 0.4167, 0.4860, 0.6213, 0.7287, 0.7694, 1.0000];
 pub const CURVE_Y: [f32; 13] = [0.0000, 0.0590, 0.1033, 0.1812, 0.2673, 0.3276, 0.4056, 0.4777, 0.5447, 0.6405, 0.7584, 0.8006, 1.0000];
 
 pub fn apply_curve(v: f32, curve: &[f32; 13]) -> f32 {
@@ -438,6 +439,9 @@ pub struct DecalOptions {
     pub y_mm: f32,     // offset dall'alto (mm)
     pub dots45: bool,  // true = screen cluster 45° (colori piatti), false = diffusion (foto)
     pub page: String,  // a4|letter|legal|a5|a3|11x17|a4ls|letterls
+    pub photo_mode: bool, // true = foto normale: nessun bianco, solo CMY
+    pub k_toner: bool,    // photo_mode + toner NERO al posto del bianco: canale K reale
+    pub double_white: bool, // decals: bianco DUPLICATO nel canale ciano (2 deg toner bianco)
 }
 
 impl Default for DecalOptions {
@@ -447,6 +451,9 @@ impl Default for DecalOptions {
             mirror: false,
             media: "glossy".into(),
             page: "a4".into(),
+            photo_mode: false,
+            k_toner: false,
+            double_white: false,
             with_pjl: false,
             width_mm: 0.0,
             x_mm: 20.0,
@@ -486,12 +493,20 @@ pub fn decal_stream(input: &str, opts: &DecalOptions) -> Result<Vec<u8>, String>
     let mut cv = vec![0f32; (dw * dh) as usize];
     let mut mv = vec![0f32; (dw * dh) as usize];
     let mut yv = vec![0f32; (dw * dh) as usize];
+    let mut kv = vec![0f32; (dw * dh) as usize];
+    let use_k = opts.photo_mode && opts.k_toner; // nero reale: canale K dedicato, niente fold
     for (i, px) in cmyk.iter().enumerate() {
         let (cf, mf, yf, kf) = (
             px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0, px[3] as f32 / 255.0,
         );
-        if opts.explicit_white && mask[i] {
+        if opts.explicit_white && !opts.photo_mode && mask[i] {
             cv[i] = 0.0; mv[i] = 0.0; yv[i] = 0.0; // knockout
+        } else if use_k {
+            // CMYK con toner nero (al posto del bianco): canali puri, niente fold
+            cv[i] = apply_curve(cf, &CURVE_C);
+            mv[i] = apply_curve(mf, &CURVE_M);
+            yv[i] = apply_curve(yf, &CURVE_Y);
+            kv[i] = apply_curve(kf, &CURVE_K);
         } else {
             // niente toner nero: K piegato in CMY + soglia anti-griglia
             // (il bianco carta dall'ICC esce con residui ~1%: lo screen 45°
@@ -519,6 +534,7 @@ pub fn decal_stream(input: &str, opts: &DecalOptions) -> Result<Vec<u8>, String>
     } else {
         halftone_plane(&yv, dw, dh)
     };
+    let kp = if use_k { halftone_plane(&kv, dw, dh) } else { Vec::new() };
 
     // posizionamento: offset mm dall'alto-sinistra (trascinabili nella GUI)
     let mut x0 = (opts.x_mm as f64 * m2dotx).round() as usize;
@@ -529,6 +545,7 @@ pub fn decal_stream(input: &str, opts: &DecalOptions) -> Result<Vec<u8>, String>
     let mut m_full = Plane::empty(pw, ph);
     let mut y_full = Plane::empty(pw, ph);
     let mut w_full = Plane::empty(pw, ph);
+    let mut k_full = Plane::empty(pw, ph);
     for yy in 0..dh {
         for xx in 0..dw {
             let sx = if opts.mirror { dw - 1 - xx } else { xx };
@@ -538,10 +555,16 @@ pub fn decal_stream(input: &str, opts: &DecalOptions) -> Result<Vec<u8>, String>
             if cp[sp] & bit != 0 { c_full.set(px as u32, py as u32); }
             if mp[sp] & bit != 0 { m_full.set(px as u32, py as u32); }
             if yp[sp] & bit != 0 { y_full.set(px as u32, py as u32); }
-            if mask[(yy as usize) * dw as usize + sx as usize] { w_full.set(px as u32, py as u32); }
+            if kp[sp] & bit != 0 { k_full.set(px as u32, py as u32); }
+            // piano bianco SOLO in modalita' decals (photo mode: slot vuoto = nessun bianco)
+            if !opts.photo_mode && mask[(yy as usize) * dw as usize + sx as usize] {
+                w_full.set(px as u32, py as u32);
+            }
         }
     }
-    let planes = [c_full, w_full, m_full, y_full];
+    // DOUBLE WHITE: il canale ciano trasporta il bianco (2° deposito) — niente ciano
+    let c_final = if opts.double_white && !opts.photo_mode { w_full.clone_data() } else { c_full };
+    let planes = [c_final, w_full, m_full, y_full];
     Ok(build_stream(&prof, &planes, opts.with_pjl, 4))
 }
 

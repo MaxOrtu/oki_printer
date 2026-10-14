@@ -22,6 +22,9 @@ fn main() {
                 mirror: args.iter().any(|a| a == "--mirror"),
                 ..Default::default()
             };
+            if args.iter().any(|a| a == "--white=double") { opts.double_white = true; }
+            if args.iter().any(|a| a == "--queue=photo") { opts.photo_mode = true; }
+            if args.iter().any(|a| a == "--k-toner") { opts.k_toner = true; }
             if let Some(v) = args.iter().find(|a| a.starts_with("--page=")) { opts.page = v[7..].to_string(); }
             if let Some(m) = args.iter().find(|a| a.starts_with("--media=")) {
                 opts.media = m[8..].to_string();

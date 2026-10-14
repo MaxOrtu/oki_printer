@@ -271,30 +271,59 @@ impl eframe::App for App {
                 ui.separator();
                 ui.add_space(6.0);
 
-                ui.label(egui::RichText::new("WHITE").small().strong().color(Color32::from_rgb(200, 210, 230)));
-                let mut mode_changed = false;
-                if ui
-                    .radio_value(&mut self.opts.explicit_white, false, "Underbase (whole shape)")
-                    .changed()
-                {
-                    mode_changed = true;
+                ui.label(egui::RichText::new("QUEUE").small().strong().color(Color32::from_rgb(200, 210, 230)));
+                let mut queue_changed = false;
+                if ui.radio_value(&mut self.opts.photo_mode, false, "🎨 Decals (white toner)").changed() { queue_changed = true; }
+                if ui.radio_value(&mut self.opts.photo_mode, true, "📷 Photo (CMY only)").changed() { queue_changed = true; }
+                if queue_changed && self.opts.photo_mode {
+                    self.opts.dots45 = false; // le foto stanno meglio col diffusion
                 }
-                if ui
-                    .radio_value(&mut self.opts.explicit_white, true, "Only where I painted white")
-                    .changed()
-                {
-                    mode_changed = true;
+                if self.opts.photo_mode {
+                    ui.checkbox(&mut self.opts.k_toner, "Black toner installed (real K)");
+                    ui.label(
+                        egui::RichText::new("CMY only (or CMYK with black toner). Darks are CMY composite without K.")
+                            .small()
+                            .color(Color32::from_rgb(150, 160, 185)),
+                    );
                 }
-                if ui.checkbox(&mut self.highlight_white, "Highlight white (cyan)").changed() {
-                    mode_changed = true;
-                }
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("on dark background white shows as-is")
-                        .small()
-                        .color(Color32::from_rgb(120, 135, 160)),
-                );
                 ui.add_space(10.0);
+
+                if !self.opts.photo_mode {
+                    ui.label(egui::RichText::new("WHITE").small().strong().color(Color32::from_rgb(200, 210, 230)));
+                    if ui
+                        .radio_value(&mut self.opts.explicit_white, false, "Underbase (whole shape)")
+                        .changed()
+                    {
+                        mode_changed = true;
+                    }
+                    if ui
+                        .radio_value(&mut self.opts.explicit_white, true, "Only where I painted white")
+                        .changed()
+                    {
+                        mode_changed = true;
+                    }
+                    if ui.checkbox(&mut self.highlight_white, "Highlight white (cyan)").changed() {
+                        mode_changed = true;
+                    }
+                    ui.add_space(4.0);
+                    if ui.checkbox(&mut self.opts.double_white, "DOUBLE WHITE (2nd white in cyan slot)").changed() {
+                        mode_changed = true;
+                    }
+                    if self.opts.double_white {
+                        ui.label(
+                            egui::RichText::new("2x white density — CYAN disabled!\nRequires 2nd white toner in cyan slot.")
+                                .small()
+                                .color(Color32::from_rgb(240, 160, 90)),
+                        );
+                    }
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("on dark background white shows as-is")
+                            .small()
+                            .color(Color32::from_rgb(120, 135, 160)),
+                    );
+                    ui.add_space(10.0);
+                }
 
                 ui.checkbox(&mut self.opts.mirror, "↔  Mirror");
                 ui.add_space(10.0);
