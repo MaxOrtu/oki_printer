@@ -318,6 +318,26 @@ impl eframe::App for App {
                 ui.radio_value(&mut self.opts.dots45, false, "Diffusion (photos)");
                 ui.add_space(10.0);
 
+                ui.label(egui::RichText::new("PAPER").small().strong().color(Color32::from_rgb(200, 210, 230)));
+                egui::ComboBox::from_id_salt("paper")
+                    .selected_text(self.opts.page.clone())
+                    .width(ui.available_width() - 12.0)
+                    .show_ui(ui, |ui| {
+                        for (m, hint) in [
+                            ("a4", "A4 210×297"),
+                            ("letter", "Letter 216×279"),
+                            ("legal", "Legal 216×356"),
+                            ("a5", "A5 148×210"),
+                            ("a3", "A3 297×420"),
+                            ("11x17", "11×17 279×432"),
+                            ("a4ls", "A4 landscape"),
+                            ("letterls", "Letter landscape"),
+                        ] {
+                            ui.selectable_value(&mut self.opts.page, m.to_string(), format!("{m} — {hint}"));
+                        }
+                    });
+                ui.add_space(10.0);
+
                 ui.label(egui::RichText::new("MEDIA").small().strong().color(Color32::from_rgb(200, 210, 230)));
                 egui::ComboBox::from_id_salt("media")
                     .selected_text(self.opts.media.clone())
@@ -412,12 +432,15 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             let avail = ui.available_size();
             let page_h = (avail.y - 30.0).max(100.0);
-            let mut page_w = page_h * (210.0 / 297.0);
+            let (_pcode, pw_in, ph_in, _land) = oki_decal::page_spec(&self.opts.page);
+            let paper_w_mm = pw_in as f32 * 25.4;
+            let paper_h_mm = ph_in as f32 * 25.4;
+            let mut page_w = page_h * (paper_w_mm / paper_h_mm);
             if page_w > avail.x - 30.0 {
                 page_w = avail.x - 30.0;
             }
-            let page_h = page_w * (297.0 / 210.0);
-            let px_mm = page_h / 297.0;
+            let page_h = page_w * (paper_h_mm / paper_w_mm);
+            let px_mm = page_h / paper_h_mm;
 
             let (page_rect, _resp) = ui.allocate_exact_size(egui::vec2(page_w, page_h), egui::Sense::hover());
             let painter = ui.painter();
@@ -450,8 +473,8 @@ impl eframe::App for App {
                     painter.rect_stroke(img_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(70, 110, 180)));
                 }
                 if resp.dragged() {
-                    self.opts.x_mm = (self.opts.x_mm + resp.drag_delta().x / px_mm).clamp(0.0, (210.0 - w_mm).max(0.0));
-                    self.opts.y_mm = (self.opts.y_mm + resp.drag_delta().y / px_mm).clamp(0.0, (297.0 - h_mm).max(0.0));
+                    self.opts.x_mm = (self.opts.x_mm + resp.drag_delta().x / px_mm).clamp(0.0, (paper_w_mm - w_mm).max(0.0));
+                    self.opts.y_mm = (self.opts.y_mm + resp.drag_delta().y / px_mm).clamp(0.0, (paper_h_mm - h_mm).max(0.0));
                 }
             } else {
                 painter.text(

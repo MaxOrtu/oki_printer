@@ -12,7 +12,42 @@ pub struct Profile {
     xmm: i32,
     ymm: i32,
     media_name: &'static str,   // es. "dGlossy"
+    paper_code: u32,            // codice PCL dimensione carta (26=A4, 2=Letter...)
+    landscape: bool,
     job_title: String,
+}
+
+/// dimensioni carta: (codice PCL, larghezza in, altezza in, orizzontale)
+pub fn page_spec(name: &str) -> (u32, f64, f64, bool) {
+    match name.to_lowercase().as_str() {
+        "letter" => (2, 8.5, 11.0, false),
+        "letterls" => (2, 11.0, 8.5, true),
+        "legal" => (3, 8.5, 14.0, false),
+        "a5" => (25, 5.83, 8.27, false),
+        "a4ls" => (26, 11.69, 8.27, true),
+        "a3" => (27, 11.69, 16.54, false),
+        "11x17" => (6, 11.0, 17.0, false),
+        _ => (26, 8.27, 11.69, false), // A4
+    }
+}
+
+pub fn profile_for(job_title: &str, media: &str, page: &str) -> Profile {
+    let (code, w_in, h_in, landscape) = page_spec(page);
+    // area raster = carta - margini 0.34" (X) e 0.33" (Y), come A4 verificato
+    let xmm = ((w_in - 0.34) * 600.0 / 25.4).round() as i32;
+    let ymm = ((h_in - 0.33) * 600.0 / 25.4).round() as i32;
+    Profile {
+        xmm,
+        ymm,
+        media_name: media_code(media),
+        paper_code: code,
+        landscape,
+        job_title: job_title.to_string(),
+    }
+}
+
+pub fn a4_profile(job_title: &str) -> Profile {
+    profile_for(job_title, "glossy", "a4")
 }
 
 // mappa nome -> comando PCL media type (dal PDX: MediaType)
@@ -32,19 +67,6 @@ pub fn media_code(name: &str) -> &'static str {
     }
 }
 
-pub fn a4_profile(job_title: &str) -> Profile {
-    // BBox A4 dal PIE: [0, 11.36, 7.93, 0] pollici; margini 200dot@600 X, 400dot@1200 Y
-    let bw = 7.93f64;
-    let bh = 11.36f64;
-    let xmm = ((bw * 600.0 + 200.0) / 600.0 * 25.4).round() as i32; // ~209
-    let ymm = ((bh * 1200.0 + 400.0) / 1200.0 * 25.4).round() as i32; // ~297
-    Profile {
-        xmm,
-        ymm,
-        media_name: "dGlossy",
-        job_title: job_title.to_string(),
-    }
-}
 
 // ---------- curve di linearizzazione (13 punti, dal psqx live) ----------
 pub const CURVE_C: [f32; 13] = [0.0000, 0.0532, 0.0911, 0.1646, 0.2408, 0.3032, 0.3715, 0.4631, 0.5873, 0.6669, 0.7599, 0.8116, 1.0000];
@@ -151,8 +173,10 @@ pub fn build_stream(prof: &Profile, planes: &[Plane], with_pjl: bool, plane_head
     s.extend_from_slice(b"\x1B&l4H"); // MultiPurpose tray
     s.extend_from_slice(format!("\x1B&n{}W{}", prof.media_name.len(), prof.media_name).as_bytes());
     s.extend_from_slice(b"\x1B&l0S"); // simplex
-    s.extend_from_slice(b"\x1B&l101A"); // custom size via PJL mm
-    s.extend_from_slice(b"\x1B/l1O"); // short edge first
+    s.extend_from_slice(format!("\x1B&l{}A", prof.paper_code).as_bytes()); // page size
+    if prof.landscape {
+        s.extend_from_slice(b"\x1B&l1O"); // landscape orientation
+    }
     s.extend_from_slice(b"\x1B&l0E\x1B&a0L\x1B&a0H\x1B&a0V");
     s.extend_from_slice(b"\x1B*p50Y");
     s.extend_from_slice(b"\x1B*r0F");
@@ -365,7 +389,7 @@ pub fn pcl_page_start(s: &mut Vec<u8>, prof: &Profile) {
     s.extend_from_slice(b"E\x0D");
     s.extend_from_slice(b"\x1B&l4H"); // MultiPurpose tray
     s.extend_from_slice(format!("\x1B&n{}W{}", prof.media_name.len(), prof.media_name).as_bytes());
-    s.extend_from_slice(b"\x1B&l0S\x1B&l101A\x1B/l1O");
+    s.extend_from_slice(b"&l0S");
     s.extend_from_slice(b"\x1B&l0E\x1B&a0L\x1B&a0H\x1B&a0V");
     s.extend_from_slice(b"\x1B*p50Y\x1B*r0F\x1B*r1A\x1B*b0Y\x1B%1A");
     s.extend_from_slice(b"\x1B*r-4U"); // 4 planes
@@ -413,6 +437,7 @@ pub struct DecalOptions {
     pub x_mm: f32,     // offset da sinistra (mm)
     pub y_mm: f32,     // offset dall'alto (mm)
     pub dots45: bool,  // true = screen cluster 45° (colori piatti), false = diffusion (foto)
+    pub page: String,  // a4|letter|legal|a5|a3|11x17|a4ls|letterls
 }
 
 impl Default for DecalOptions {
@@ -421,6 +446,7 @@ impl Default for DecalOptions {
             explicit_white: false,
             mirror: false,
             media: "glossy".into(),
+            page: "a4".into(),
             with_pjl: false,
             width_mm: 0.0,
             x_mm: 20.0,
