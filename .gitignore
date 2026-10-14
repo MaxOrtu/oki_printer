@@ -27,3 +27,4 @@ oki_list.html
 oki_page.html
 *.log
 .claude/
+lib_new.rs
