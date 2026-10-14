@@ -1,4 +1,6 @@
 // oki-decal-gui: print white-toner decals for OKI C711WT — egui GUI
+// in release: nessuna console sotto la finestra
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use eframe::egui;
 use egui::{Color32, ColorImage, TextureHandle, TextureOptions};
 use image::GenericImageView;
