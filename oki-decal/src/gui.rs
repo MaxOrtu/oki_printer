@@ -273,6 +273,7 @@ impl eframe::App for App {
 
                 ui.label(egui::RichText::new("QUEUE").small().strong().color(Color32::from_rgb(200, 210, 230)));
                 let mut queue_changed = false;
+                let mut mode_changed = false;
                 if ui.radio_value(&mut self.opts.photo_mode, false, "🎨 Decals (white toner)").changed() { queue_changed = true; }
                 if ui.radio_value(&mut self.opts.photo_mode, true, "📷 Photo (CMY only)").changed() { queue_changed = true; }
                 if queue_changed && self.opts.photo_mode {
